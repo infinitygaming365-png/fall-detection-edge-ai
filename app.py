@@ -1,54 +1,85 @@
-import streamlit as st
 import cv2
+import time
 import numpy as np
 from ultralytics import YOLO
-from PIL import Image
-import tempfile
-import time
 
-st.set_page_config(page_title="Edge AI Fall Detection", layout="centered")
-st.title("🧠 Real-Time Fall Detection (Edge AI Demo)")
+# Load pose model
+model = YOLO("models/yolov8n-pose.pt")
 
-# Load model
-model = YOLO("best.pt")
+CONF_THRESHOLD = 0.5
+ANGLE_THRESHOLD = 60
+ANGLE_SPIKE_THRESHOLD = 20
+HORIZONTAL_CONFIRM_FRAMES = 8
 
-uploaded_file = st.file_uploader("Upload Image or Video", type=["jpg", "png", "mp4"])
+previous_angle = None
+collapse_detected = False
+horizontal_counter = 0
 
-if uploaded_file is not None:
-    file_type = uploaded_file.type
+cap = cv2.VideoCapture(0)
 
-    if "image" in file_type:
-        image = Image.open(uploaded_file)
-        results = model(image)
-        annotated = results[0].plot()
-        st.image(annotated, caption="Detection Result", use_column_width=True)
+print("Press 'q' to quit.")
 
-    elif "video" in file_type:
-        tfile = tempfile.NamedTemporaryFile(delete=False)
-        tfile.write(uploaded_file.read())
+while True:
+    start_time = time.time()
+    ret, frame = cap.read()
+    if not ret:
+        break
 
-        cap = cv2.VideoCapture(tfile.name)
-        stframe = st.empty()
+    results = model(frame, conf=CONF_THRESHOLD)
+    current_angle = None
 
-        prev_time = 0
+    if results[0].keypoints is not None:
+        for person in results[0].keypoints.xy:
 
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
+            left_shoulder = person[5]
+            right_shoulder = person[6]
+            left_hip = person[11]
+            right_hip = person[12]
 
-            start = time.time()
-            results = model(frame, imgsz=416, conf=0.7)
-            annotated = results[0].plot()
-            end = time.time()
+            shoulder_mid = (
+                (left_shoulder[0] + right_shoulder[0]) / 2,
+                (left_shoulder[1] + right_shoulder[1]) / 2
+            )
 
-            fps = 1 / (end - start)
+            hip_mid = (
+                (left_hip[0] + right_hip[0]) / 2,
+                (left_hip[1] + right_hip[1]) / 2
+            )
 
-            cv2.putText(annotated, f"FPS: {int(fps)}",
-                        (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        1, (0,255,0), 2)
+            dx = hip_mid[0] - shoulder_mid[0]
+            dy = hip_mid[1] - shoulder_mid[1]
 
-            stframe.image(annotated, channels="BGR")
+            current_angle = np.degrees(np.arctan2(abs(dx), abs(dy)))
 
-        cap.release()
+    # Stage 1: Detect sudden collapse
+    if previous_angle is not None and current_angle is not None:
+        angle_change = current_angle - previous_angle
+        if angle_change > ANGLE_SPIKE_THRESHOLD:
+            collapse_detected = True
+
+    previous_angle = current_angle
+
+    # Stage 2: Confirm horizontal posture
+    if collapse_detected and current_angle is not None:
+        if current_angle > ANGLE_THRESHOLD:
+            horizontal_counter += 1
+        else:
+            horizontal_counter = 0
+            collapse_detected = False
+
+    # Alert
+    if horizontal_counter >= HORIZONTAL_CONFIRM_FRAMES:
+        cv2.putText(frame,
+                    "FALL DETECTED",
+                    (50, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1.2,
+                    (0, 0, 255), 3)
+
+    cv2.imshow("Fall Detection", frame)
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
