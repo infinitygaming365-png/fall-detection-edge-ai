@@ -56,8 +56,21 @@ Temporal Confirmation → Fall Alert
 - Runs on standard laptop
 
 ---
+  
+ ## Evaluation
+
+The system was tested on live webcam scenarios including:
+- Standing posture
+- Slow bending
+- Side bending
+- Simulated sudden fall
+
+The two-stage logic significantly reduced false positives compared to posture-only detection.
+
+---
 
 ##  Installation
 
 ```bash
 pip install -r requirements.txt
+
